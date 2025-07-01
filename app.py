@@ -55,7 +55,7 @@ def index():
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 min-height: 100vh; padding: 20px; color: #333;
-            }
+            // Handle Enter key
             .container { 
                 max-width: 900px; margin: 0 auto; 
                 background: white; border-radius: 15px; 
@@ -96,6 +96,17 @@ def index():
             .btn-success:hover { background: #218838; }
             .hidden { display: none; }
             .main-content { display: none; }
+            .instructions {
+                background: #f8f9fa; padding: 15px; border-radius: 5px;
+                margin: 10px 0; text-align: left; font-size: 0.9em;
+            }
+            .instructions ol {
+                margin-left: 20px;
+            }
+            .credentials-configured {
+                background: #d4edda; border: 1px solid #c3e6cb;
+                color: #155724; padding: 15px; border-radius: 5px;
+            }
             .debug {
                 background: #f8f9fa; border: 1px solid #dee2e6;
                 padding: 15px; border-radius: 5px; margin: 15px 0;
@@ -134,9 +145,38 @@ def index():
                     <p>Welcome! You are successfully authenticated.</p>
                     
                     <div class="auth-section">
-                        <h4>📧 Gmail OAuth Setup</h4>
-                        <p>Coming soon: Gmail OAuth configuration</p>
-                        <button class="btn btn-success">🚀 Setup Gmail</button>
+                        <h4>🔑 Step 1: Configure Google OAuth Credentials</h4>
+                        <div id="credentials-status">Loading credentials status...</div>
+                        
+                        <div id="credentials-form" style="margin-top: 15px;">
+                            <p>Enter your Google Cloud Console OAuth credentials:</p>
+                            <div class="input-group">
+                                <input type="text" id="client-id" placeholder="Google Client ID (starts with numbers)" style="min-width: 400px;">
+                            </div>
+                            <div class="input-group">
+                                <input type="password" id="client-secret" placeholder="Google Client Secret" style="min-width: 300px;">
+                            </div>
+                            <button onclick="setupCredentials()" class="btn btn-success">💾 Save Credentials</button>
+                            <button onclick="clearCredentials()" class="btn" style="background: #6c757d;">🗑️ Clear</button>
+                        </div>
+                        
+                        <div class="instructions" style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin-top: 15px; text-align: left;">
+                            <h6>📋 How to get Google OAuth credentials:</h6>
+                            <ol style="margin-left: 20px;">
+                                <li>Go to <a href="https://console.cloud.google.com" target="_blank" style="color: #4a90e2;">Google Cloud Console</a></li>
+                                <li>Create a new project or select existing one</li>
+                                <li>Enable Gmail API in "APIs & Services" → "Library"</li>
+                                <li>Go to "Credentials" → "Create Credentials" → "OAuth 2.0 Client IDs"</li>
+                                <li>Choose "Desktop Application" as application type</li>
+                                <li>Copy the Client ID and Client Secret here</li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <div class="auth-section">
+                        <h4>📧 Step 2: Gmail OAuth Setup</h4>
+                        <p>Configure your Google credentials above first, then Gmail authentication will be available here.</p>
+                        <button class="btn" disabled id="gmail-setup-btn">🚀 Setup Gmail OAuth</button>
                     </div>
                     
                     <div class="auth-section">
@@ -197,6 +237,7 @@ def index():
                         document.getElementById('main-content').style.display = 'block';
                         refreshInfo();
                         refreshLogs();
+                        checkCredentialsStatus();
                     } else {
                         log(`❌ Authentication failed: ${data.message}`);
                         alert('Authentication failed: ' + data.message);
@@ -219,6 +260,7 @@ def index():
                         <p><strong>Port:</strong> ${data.port}</p>
                         <p><strong>Environment:</strong> ${data.environment}</p>
                         <p><strong>Google APIs:</strong> ${data.google_apis_available ? '✅' : '❌'}</p>
+                        <p><strong>OAuth Credentials:</strong> ${data.oauth_credentials_configured ? '✅' : '❌'}</p>
                         <p><strong>Status:</strong> ${data.deployment_status}</p>
                     `;
                     log("✅ System info refreshed");
@@ -244,7 +286,122 @@ def index():
                 });
             }
 
-            // Handle Enter key
+            function checkCredentialsStatus() {
+                log("🔄 Checking credentials status...");
+                
+                fetch('/api/gmail/credentials-status')
+                .then(r => r.json())
+                .then(data => {
+                    const statusDiv = document.getElementById('credentials-status');
+                    const gmailBtn = document.getElementById('gmail-setup-btn');
+                    const credentialsForm = document.getElementById('credentials-form');
+                    
+                    if (data.configured) {
+                        statusDiv.innerHTML = `
+                            <div class="credentials-configured">
+                                <h5>✅ OAuth Credentials Configured</h5>
+                                <p><strong>Client ID:</strong> ${data.client_id_preview}</p>
+                                <p><strong>Client Secret:</strong> ${data.has_secret ? '✅ Set' : '❌ Missing'}</p>
+                            </div>
+                        `;
+                        gmailBtn.disabled = false;
+                        gmailBtn.textContent = '🚀 Ready for Gmail OAuth';
+                        credentialsForm.style.display = 'none';
+                        log("✅ Credentials are configured");
+                    } else {
+                        statusDiv.innerHTML = `
+                            <div class="credentials-missing">
+                                <h5>❌ OAuth Credentials Not Configured</h5>
+                                <p>Please enter your Google Cloud Console credentials below.</p>
+                            </div>
+                        `;
+                        gmailBtn.disabled = true;
+                        gmailBtn.textContent = '⚠️ Configure credentials first';
+                        credentialsForm.style.display = 'block';
+                        log("❌ Credentials not configured");
+                    }
+                })
+                .catch(err => {
+                    log(`❌ Failed to check credentials: ${err.message}`);
+                    document.getElementById('credentials-status').innerHTML = 
+                        '<div class="credentials-missing">❌ Failed to check credentials status</div>';
+                });
+            }
+
+            function setupCredentials() {
+                log("🔄 Setting up credentials...");
+                
+                const clientId = document.getElementById('client-id').value.trim();
+                const clientSecret = document.getElementById('client-secret').value.trim();
+                
+                log(`📝 Client ID length: ${clientId.length}`);
+                log(`📝 Client Secret length: ${clientSecret.length}`);
+                
+                if (!clientId || !clientSecret) {
+                    alert('Please enter both Client ID and Client Secret');
+                    log("❌ Missing credentials");
+                    return;
+                }
+                
+                log("📡 Sending credentials to server...");
+                
+                fetch('/api/gmail/setup-credentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        client_id: clientId,
+                        client_secret: clientSecret 
+                    })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    log(`📥 Setup response: ${JSON.stringify(data)}`);
+                    
+                    if (data.success) {
+                        alert('✅ OAuth credentials configured successfully!');
+                        document.getElementById('client-id').value = '';
+                        document.getElementById('client-secret').value = '';
+                        checkCredentialsStatus();
+                        refreshLogs();
+                        log("✅ Credentials setup successful");
+                    } else {
+                        alert('❌ Failed to configure credentials: ' + data.error);
+                        log(`❌ Setup failed: ${data.error}`);
+                    }
+                })
+                .catch(err => {
+                    log(`❌ Setup request failed: ${err.message}`);
+                    alert('Failed to save credentials: ' + err.message);
+                });
+            }
+
+            function clearCredentials() {
+                if (!confirm('Are you sure you want to clear the stored OAuth credentials?')) {
+                    return;
+                }
+                
+                log("🔄 Clearing credentials...");
+                
+                fetch('/api/gmail/clear-credentials', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('✅ Credentials cleared successfully');
+                        document.getElementById('client-id').value = '';
+                        document.getElementById('client-secret').value = '';
+                        checkCredentialsStatus();
+                        refreshLogs();
+                        log("✅ Credentials cleared");
+                    } else {
+                        alert('❌ Failed to clear credentials: ' + data.error);
+                        log(`❌ Clear failed: ${data.error}`);
+                    }
+                })
+                .catch(err => {
+                    log(`❌ Clear request failed: ${err.message}`);
+                    alert('Failed to clear credentials: ' + err.message);
+                });
+            }
             document.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter' && document.getElementById('auth-section').style.display !== 'none') {
                     login();
@@ -255,6 +412,7 @@ def index():
             document.addEventListener('DOMContentLoaded', function() {
                 log("🚀 Page loaded successfully");
                 log("🔧 Admin password: admin123");
+                log("📋 Ready for OAuth credential setup");
             });
         </script>
     </body>
@@ -291,7 +449,50 @@ def api_auth():
         print(f"❌ Auth error: {e}")
         return jsonify({'success': False, 'message': f'Error: {str(e)}'}), 500
 
-@app.route('/api/system-info')
+@app.route('/api/gmail/setup-credentials', methods=['POST'])
+def api_gmail_setup_credentials():
+    """Setup OAuth credentials via GUI"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        data = request.get_json()
+        client_id = data.get('client_id', '')
+        client_secret = data.get('client_secret', '')
+        
+        print(f"Setting up credentials - Client ID length: {len(client_id)}, Secret length: {len(client_secret)}")
+        
+        result = scanner.setup_oauth_credentials(client_id, client_secret)
+        return jsonify(result)
+    except Exception as e:
+        scanner.add_log(f"Credentials setup failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/gmail/credentials-status')
+def api_gmail_credentials_status():
+    """Get OAuth credentials configuration status"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        status = scanner.get_credentials_status()
+        return jsonify(status)
+    except Exception as e:
+        scanner.add_log(f"Credentials status check failed: {e}", "ERROR")
+        return jsonify({'configured': False, 'error': str(e)})
+
+@app.route('/api/gmail/clear-credentials', methods=['POST'])
+def api_gmail_clear_credentials():
+    """Clear stored OAuth credentials"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        result = scanner.clear_credentials()
+        return jsonify(result)
+    except Exception as e:
+        scanner.add_log(f"Clear credentials failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
 def api_system_info():
     """System information"""
     try:
@@ -303,7 +504,8 @@ def api_system_info():
             'environment': 'Railway',
             'admin_authenticated': True,
             'google_apis_available': GOOGLE_APIS_AVAILABLE,
-            'deployment_status': 'Active',
+            'oauth_credentials_configured': scanner.get_credentials_status()['configured'],
+            'deployment_status': 'Active with GUI OAuth',
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:

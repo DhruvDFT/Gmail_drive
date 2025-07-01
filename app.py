@@ -52,7 +52,7 @@ class BasicGmailScanner:
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]
-                }
+                // Handle Enter key
             }
             
             # Store in session for persistence
@@ -63,6 +63,46 @@ class BasicGmailScanner:
             
         except Exception as e:
             self.add_log(f"OAuth credential setup failed: {e}", "ERROR")
+    def start_simple_oauth(self):
+        """Start simple OAuth flow - manual URL generation"""
+        try:
+            if not self.client_config:
+                self.client_config = session.get('oauth_client_config')
+                
+            if not self.client_config:
+                return {'success': False, 'error': 'OAuth credentials not configured'}
+            
+            self.add_log("Starting simple Gmail OAuth flow")
+            
+            # Manual OAuth URL generation (safer than complex flow objects)
+            client_id = self.client_config['installed']['client_id']
+            
+            import urllib.parse
+            params = {
+                'client_id': client_id,
+                'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob',
+                'scope': 'https://www.googleapis.com/auth/gmail.readonly',
+                'response_type': 'code',
+                'access_type': 'offline'
+            }
+            
+            auth_url = 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
+            
+            self.add_log("OAuth URL generated successfully")
+            
+            return {
+                'success': True, 
+                'auth_url': auth_url,
+                'instructions': [
+                    "1. Click the link below to open Google authorization",
+                    "2. Sign in and grant Gmail permissions",
+                    "3. Copy the authorization code Google provides",
+                    "4. Paste it back here and click Complete"
+                ]
+            }
+            
+        except Exception as e:
+            self.add_log(f"Simple OAuth start failed: {e}", "ERROR")
             return {'success': False, 'error': str(e)}
     
     def get_credentials_status(self):
@@ -269,9 +309,30 @@ def index():
                     </div>
 
                     <div class="auth-section">
-                        <h4>📊 Step 3: Gmail Authentication</h4>
-                        <p>After testing OAuth setup, Gmail authentication will be available here.</p>
-                        <button class="btn" disabled>🚀 Gmail OAuth (Coming Next)</button>
+                        <h4>📧 Step 3: Gmail OAuth Authentication</h4>
+                        <p>Your OAuth setup test passed! Now you can authenticate with Gmail.</p>
+                        <button onclick="startSimpleOAuth()" class="btn btn-success" id="start-oauth-btn">🚀 Start Gmail OAuth</button>
+                        
+                        <div id="oauth-instructions" class="hidden" style="margin-top: 15px;">
+                            <div class="instructions">
+                                <h6>📋 OAuth Steps:</h6>
+                                <div id="instruction-list"></div>
+                                <p><strong>Authorization URL:</strong></p>
+                                <div id="auth-url" style="background: #f5f5f5; padding: 10px; border-radius: 5px; word-break: break-all; margin: 10px 0; font-size: 0.9em;"></div>
+                                <div class="input-group">
+                                    <input type="text" id="auth-code" placeholder="Paste authorization code here" style="min-width: 300px; font-family: monospace;">
+                                    <button onclick="completeSimpleOAuth()" class="btn">✅ Complete</button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="gmail-status" style="margin-top: 15px;"></div>
+                    </div>
+
+                    <div class="auth-section">
+                        <h4>📊 Step 4: Email Scanning</h4>
+                        <p>Complete Gmail authentication to enable email scanning.</p>
+                        <button class="btn" disabled>📊 Scan Emails (Coming Soon)</button>
                     </div>
                     
                     <div class="auth-section">
@@ -542,7 +603,91 @@ def index():
                 });
             }
 
-            // Handle Enter key
+            function startSimpleOAuth() {
+                log("🔄 Starting simple Gmail OAuth...");
+                
+                document.getElementById('start-oauth-btn').textContent = '⏳ Generating OAuth URL...';
+                document.getElementById('start-oauth-btn').disabled = true;
+                
+                fetch('/api/gmail/start-simple-oauth', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    log(`📥 OAuth start response: ${JSON.stringify(data)}`);
+                    
+                    if (data.success) {
+                        document.getElementById('oauth-instructions').classList.remove('hidden');
+                        
+                        // Show instructions
+                        const instructionList = document.getElementById('instruction-list');
+                        instructionList.innerHTML = '<ol style="margin-left: 20px;">' + 
+                            data.instructions.map(inst => `<li>${inst}</li>`).join('') + 
+                            '</ol>';
+                        
+                        // Show auth URL
+                        document.getElementById('auth-url').innerHTML = 
+                            `<a href="${data.auth_url}" target="_blank" style="color: #4a90e2;">${data.auth_url}</a>`;
+                        
+                        document.getElementById('start-oauth-btn').textContent = '⏳ Waiting for authorization...';
+                        log("✅ OAuth URL ready - click the link above");
+                    } else {
+                        alert('❌ Failed to start OAuth: ' + data.error);
+                        document.getElementById('start-oauth-btn').textContent = '🚀 Start Gmail OAuth';
+                        document.getElementById('start-oauth-btn').disabled = false;
+                        log(`❌ OAuth start failed: ${data.error}`);
+                    }
+                })
+                .catch(err => {
+                    log(`❌ OAuth start failed: ${err.message}`);
+                    alert('OAuth request failed: ' + err.message);
+                    document.getElementById('start-oauth-btn').textContent = '🚀 Start Gmail OAuth';
+                    document.getElementById('start-oauth-btn').disabled = false;
+                });
+            }
+
+            function completeSimpleOAuth() {
+                const authCode = document.getElementById('auth-code').value.trim();
+                if (!authCode) {
+                    alert('Please enter the authorization code from Google');
+                    return;
+                }
+                
+                log(`🔄 Completing OAuth with code: ${authCode.substring(0, 10)}...`);
+                
+                fetch('/api/gmail/complete-simple-oauth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ auth_code: authCode })
+                })
+                .then(r => r.json())
+                .then(data => {
+                    log(`📥 OAuth complete response: ${JSON.stringify(data)}`);
+                    
+                    if (data.success) {
+                        alert(`✅ Gmail connected successfully!\\nEmail: ${data.email}`);
+                        document.getElementById('oauth-instructions').classList.add('hidden');
+                        document.getElementById('auth-code').value = '';
+                        
+                        // Show success status
+                        document.getElementById('gmail-status').innerHTML = `
+                            <div class="credentials-configured">
+                                <h5>✅ Gmail Connected</h5>
+                                <p><strong>Email:</strong> ${data.email}</p>
+                                <p><strong>Messages:</strong> ${data.total_messages || 'Unknown'}</p>
+                            </div>
+                        `;
+                        
+                        refreshLogs();
+                        log("✅ Gmail OAuth completed successfully");
+                    } else {
+                        alert('❌ OAuth completion failed: ' + data.error);
+                        log(`❌ OAuth completion failed: ${data.error}`);
+                    }
+                })
+                .catch(err => {
+                    log(`❌ OAuth completion failed: ${err.message}`);
+                    alert('OAuth completion failed: ' + err.message);
+                });
+            }
             document.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter' && document.getElementById('auth-section').style.display !== 'none') {
                     login();
@@ -633,6 +778,43 @@ def api_gmail_clear_credentials():
         return jsonify(result)
     except Exception as e:
         scanner.add_log(f"Clear credentials failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/gmail/start-simple-oauth', methods=['POST'])
+def api_gmail_start_simple_oauth():
+    """Start simple Gmail OAuth flow"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        result = scanner.start_simple_oauth()
+        return jsonify(result)
+    except Exception as e:
+        scanner.add_log(f"Simple OAuth start failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/gmail/complete-simple-oauth', methods=['POST'])
+def api_gmail_complete_simple_oauth():
+    """Complete simple Gmail OAuth flow - placeholder for now"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        data = request.get_json()
+        auth_code = data.get('auth_code', '')
+        
+        scanner.add_log(f"Received OAuth completion request with code: {auth_code[:10]}...")
+        
+        # For now, just simulate success to test the flow
+        return jsonify({
+            'success': True,
+            'email': 'test@example.com',
+            'total_messages': 1234,
+            'message': 'OAuth completion simulation - real implementation coming next'
+        })
+        
+    except Exception as e:
+        scanner.add_log(f"Simple OAuth completion failed: {e}", "ERROR")
         return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/gmail/test-oauth', methods=['POST'])

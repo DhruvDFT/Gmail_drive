@@ -473,10 +473,11 @@ def index():
                 <div id="auth-section" class="auth-section">
                     <h3>🔐 Admin Authentication</h3>
                     <div class="input-group">
-                        <input type="password" id="admin-password" placeholder="Enter admin password">
-                        <button class="btn" onclick="authenticate()">🔑 Login</button>
+                        <input type="password" id="admin-password" placeholder="Enter admin password" autocomplete="current-password">
+                        <button type="button" class="btn" onclick="authenticate()" id="login-btn">🔑 Login</button>
                     </div>
-                    <p>Enter admin password to access the Gmail scanner</p>
+                    <p>Default password: <code>admin123</code> (change via ADMIN_PASSWORD env var)</p>
+                    <div id="auth-debug" style="margin-top: 10px; font-size: 0.9em; color: #666;"></div>
                 </div>
 
                 <div id="main-content" class="main-content">
@@ -561,7 +562,11 @@ def index():
         </div>
 
         <script>
+        // Debug function to check if scripts are loading
+        console.log('Script loaded successfully');
+        
         function authenticate() {
+            console.log('Authenticate function called');
             const password = document.getElementById('admin-password').value;
             
             if (!password) {
@@ -876,10 +881,47 @@ def index():
         }
 
         // Handle Enter key in password field
-        document.getElementById('admin-password').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                authenticate();
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, setting up event listeners...');
+            
+            const passwordField = document.getElementById('admin-password');
+            const loginBtn = document.getElementById('login-btn');
+            
+            if (passwordField) {
+                passwordField.addEventListener('keypress', function(e) {
+                    console.log('Key pressed:', e.key);
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        authenticate();
+                    }
+                });
+                console.log('Password field event listener added');
+            } else {
+                console.error('Password field not found!');
             }
+            
+            if (loginBtn) {
+                loginBtn.addEventListener('click', function(e) {
+                    console.log('Login button clicked');
+                    e.preventDefault();
+                    authenticate();
+                });
+                console.log('Login button event listener added');
+            } else {
+                console.error('Login button not found!');
+            }
+            
+            // Test authentication endpoint
+            fetch('/api/test')
+            .then(r => r.json())
+            .then(data => {
+                console.log('API test successful:', data);
+                document.getElementById('auth-debug').innerHTML = '✅ API connection working';
+            })
+            .catch(err => {
+                console.error('API test failed:', err);
+                document.getElementById('auth-debug').innerHTML = '❌ API connection failed: ' + err.message;
+            });
         });
         
         // Auto-refresh OAuth status every 30 seconds if authenticated
@@ -896,21 +938,32 @@ def index():
 
 @app.route('/api/auth', methods=['POST'])
 def api_auth():
-    """Railway admin authentication - UNCHANGED"""
+    """Railway admin authentication - Enhanced with debugging"""
     try:
+        print(f"Auth endpoint hit at {datetime.now()}")
         data = request.get_json()
+        print(f"Request data: {data}")
+        
+        if not data:
+            return jsonify({'success': False, 'message': 'No data received'}), 400
+        
         password = data.get('password', '')
+        print(f"Password length: {len(password) if password else 0}")
         
         if password == ADMIN_PASSWORD:
             session['admin_authenticated'] = True
             scanner.add_log("Admin authentication successful")
+            print("Authentication successful")
             return jsonify({'success': True, 'message': 'Authentication successful'})
         else:
-            scanner.add_log("Failed admin authentication attempt", "WARNING")
+            scanner.add_log(f"Failed admin authentication attempt with password length: {len(password)}", "WARNING")
+            print(f"Authentication failed. Expected: {ADMIN_PASSWORD}, Got: {password}")
             return jsonify({'success': False, 'message': 'Invalid password'})
     except Exception as e:
-        scanner.add_log(f"Authentication error: {e}", "ERROR")
-        return jsonify({'success': False, 'message': f'Authentication error: {str(e)}'})
+        error_msg = f"Authentication error: {e}"
+        print(error_msg)
+        scanner.add_log(error_msg, "ERROR")
+        return jsonify({'success': False, 'message': error_msg}), 500
 
 @app.route('/api/system-info')
 def api_system_info():

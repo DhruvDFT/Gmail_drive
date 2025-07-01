@@ -2,33 +2,26 @@ import os
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, session
 
-# OPTIONAL: Try to import Google APIs (won't break if missing)
-try:
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from googleapiclient.discovery import build
-    from google.auth.transport.requests import Request
-    GOOGLE_APIS_AVAILABLE = True
-except ImportError:
-    GOOGLE_APIS_AVAILABLE = False
-
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'default-secret-key-2024')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
 
-# MINIMAL Gmail scanner class
+# Check if Google APIs are available
+try:
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from googleapiclient.discovery import build
+    GOOGLE_APIS_AVAILABLE = True
+except ImportError:
+    GOOGLE_APIS_AVAILABLE = False
+
+# MINIMAL Gmail scanner class - back to working version
 class BasicGmailScanner:
     def __init__(self):
         self.gmail_service = None
         self.credentials = None
         self.logs = []
         self.client_config = None
-        
-        # OAuth configuration
-        self.SCOPES = [
-            'https://www.googleapis.com/auth/gmail.readonly',
-            'https://www.googleapis.com/auth/gmail.metadata'
-        ]
         
     def add_log(self, message, level="INFO"):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -59,7 +52,7 @@ class BasicGmailScanner:
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]
-                // Handle Enter key
+                }
             }
             
             # Store in session for persistence
@@ -70,185 +63,7 @@ class BasicGmailScanner:
             
         except Exception as e:
             self.add_log(f"OAuth credential setup failed: {e}", "ERROR")
-    def start_oauth_flow(self):
-        """Start Gmail OAuth flow using stored credentials"""
-        try:
-            if not GOOGLE_APIS_AVAILABLE:
-                return {'success': False, 'error': 'Google APIs not installed'}
-            
-            if not self.client_config:
-                # Try to restore from session
-                self.client_config = session.get('oauth_client_config')
-                
-            if not self.client_config:
-                return {'success': False, 'error': 'OAuth credentials not configured. Please setup credentials first.'}
-            
-            self.add_log("Starting Gmail OAuth flow")
-            
-            # Simple manual OAuth URL generation (more reliable)
-            client_id = self.client_config['installed']['client_id']
-            
-            import urllib.parse
-            params = {
-                'client_id': client_id,
-                'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob',
-                'scope': 'https://www.googleapis.com/auth/gmail.readonly',
-                'response_type': 'code',
-                'access_type': 'offline',
-                'prompt': 'consent'
-            }
-            
-            auth_url = 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
-            
-            self.add_log(f"OAuth URL generated successfully")
-            
-            return {
-                'success': True, 
-                'auth_url': auth_url,
-                'instructions': [
-                    "1. Click the authorization URL below",
-                    "2. Sign in to your Google account", 
-                    "3. Grant Gmail permissions to this application",
-                    "4. Copy the authorization code from Google",
-                    "5. Paste the code back here and click Complete"
-                ]
-            }
-            
-        except Exception as e:
-            self.add_log(f"OAuth flow start failed: {e}", "ERROR")
-            return {'success': False, 'error': f'OAuth flow failed: {str(e)}'}
-    
-    def complete_oauth_flow(self, auth_code):
-        """Complete Gmail OAuth flow with authorization code"""
-        try:
-            if not auth_code or len(auth_code.strip()) < 10:
-                return {'success': False, 'error': 'Invalid authorization code provided'}
-            
-            auth_code = auth_code.strip()
-            self.add_log(f"Completing OAuth with code: {auth_code[:10]}...")
-            
-            if not self.client_config:
-                self.client_config = session.get('oauth_client_config')
-                
-            if not self.client_config:
-                return {'success': False, 'error': 'OAuth session expired. Please restart the flow.'}
-            
-            # Manual token exchange (more reliable than InstalledAppFlow)
-            import urllib.parse, urllib.request, json
-            
-            client_id = self.client_config['installed']['client_id']
-            client_secret = self.client_config['installed']['client_secret']
-            
-            token_data = {
-                'client_id': client_id,
-                'client_secret': client_secret,
-                'code': auth_code,
-                'grant_type': 'authorization_code',
-                'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob'
-            }
-            
-            req = urllib.request.Request(
-                'https://oauth2.googleapis.com/token',
-                data=urllib.parse.urlencode(token_data).encode(),
-                headers={'Content-Type': 'application/x-www-form-urlencoded'}
-            )
-            
-            with urllib.request.urlopen(req) as response:
-                token_response = json.loads(response.read().decode())
-            
-            if 'error' in token_response:
-                return {'success': False, 'error': f"Token exchange failed: {token_response.get('error_description', 'Unknown error')}"}
-            
-            # Create credentials manually
-            self.credentials = Credentials(
-                token=token_response.get('access_token'),
-                refresh_token=token_response.get('refresh_token'),
-                token_uri='https://oauth2.googleapis.com/token',
-                client_id=client_id,
-                client_secret=client_secret
-            )
-            
-            # Create Gmail service
-            self.gmail_service = build('gmail', 'v1', credentials=self.credentials)
-            
-            # Test connection and get user info
-            profile = self.gmail_service.users().getProfile(userId='me').execute()
-            email_address = profile.get('emailAddress', 'Unknown')
-            total_messages = profile.get('messagesTotal', 0)
-            
-            # Store credentials in session for persistence
-            session['gmail_credentials'] = {
-                'token': self.credentials.token,
-                'refresh_token': self.credentials.refresh_token,
-                'token_uri': self.credentials.token_uri,
-                'client_id': self.credentials.client_id,
-                'client_secret': self.credentials.client_secret
-            }
-            
-            self.add_log(f"Gmail authentication successful for: {email_address}")
-            
-            return {
-                'success': True,
-                'email': email_address,
-                'total_messages': total_messages
-            }
-            
-        except Exception as e:
-            self.add_log(f"OAuth completion failed: {e}", "ERROR")
-            return {'success': False, 'error': f'OAuth completion failed: {str(e)}'}
-    
-    def get_gmail_status(self):
-        """Get current Gmail connection status"""
-        try:
-            if not self.gmail_service:
-                # Try to restore from session
-                creds_data = session.get('gmail_credentials')
-                if creds_data:
-                    try:
-                        self.credentials = Credentials(
-                            token=creds_data['token'],
-                            refresh_token=creds_data.get('refresh_token'),
-                            token_uri=creds_data['token_uri'],
-                            client_id=creds_data['client_id'],
-                            client_secret=creds_data['client_secret']
-                        )
-                        self.gmail_service = build('gmail', 'v1', credentials=self.credentials)
-                    except Exception as e:
-                        self.add_log(f"Failed to restore Gmail credentials: {e}", "ERROR")
-                        return {
-                            'connected': False,
-                            'email': None,
-                            'status': 'Credentials restoration failed'
-                        }
-            
-            if not self.gmail_service:
-                return {
-                    'connected': False,
-                    'email': None,
-                    'status': 'Not connected'
-                }
-            
-            # Test current connection
-            profile = self.gmail_service.users().getProfile(userId='me').execute()
-            email = profile.get('emailAddress', 'Unknown')
-            
-            return {
-                'connected': True,
-                'email': email,
-                'status': 'Active connection',
-                'total_messages': profile.get('messagesTotal', 0)
-            }
-            
-        except Exception as e:
-            self.add_log(f"Gmail status check failed: {e}", "ERROR")
-            # Clear invalid credentials
-            self.gmail_service = None
-            self.credentials = None
-            return {
-                'connected': False,
-                'email': None,
-                'status': f'Connection error: {str(e)}'
-            }
+            return {'success': False, 'error': str(e)}
     
     def get_credentials_status(self):
         """Check if OAuth credentials are configured"""
@@ -276,10 +91,32 @@ class BasicGmailScanner:
         try:
             self.client_config = None
             session.pop('oauth_client_config', None)
+            session.pop('gmail_credentials', None)
+            self.gmail_service = None
+            self.credentials = None
             self.add_log("OAuth credentials cleared from GUI")
             return {'success': True, 'message': 'Credentials cleared successfully'}
         except Exception as e:
             self.add_log(f"Clear credentials failed: {e}", "ERROR")
+            return {'success': False, 'error': str(e)}
+    
+    def test_oauth_setup(self):
+        """Test if OAuth is ready - simple check without complex operations"""
+        try:
+            if not GOOGLE_APIS_AVAILABLE:
+                return {'success': False, 'error': 'Google APIs not available'}
+            
+            if not self.client_config:
+                self.client_config = session.get('oauth_client_config')
+                
+            if not self.client_config:
+                return {'success': False, 'error': 'OAuth credentials not configured'}
+            
+            self.add_log("OAuth setup test successful")
+            return {'success': True, 'message': 'OAuth setup is ready for testing'}
+            
+        except Exception as e:
+            self.add_log(f"OAuth test failed: {e}", "ERROR")
             return {'success': False, 'error': str(e)}
 
 # Initialize scanner
@@ -287,7 +124,7 @@ scanner = BasicGmailScanner()
 
 @app.route('/')
 def index():
-    """Working Railway deployment page"""
+    """Working Railway deployment page with safe credential setup"""
     template = '''
     <!DOCTYPE html>
     <html lang="en">
@@ -301,124 +138,6 @@ def index():
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 min-height: 100vh; padding: 20px; color: #333;
-            function checkGmailStatus() {
-                log("🔄 Checking Gmail connection status...");
-                
-                fetch('/api/gmail/status')
-                .then(r => r.json())
-                .then(data => {
-                    const statusDiv = document.getElementById('gmail-status');
-                    const scanBtn = document.getElementById('scan-btn');
-                    
-                    if (data.connected) {
-                        statusDiv.innerHTML = `
-                            <div class="credentials-configured">
-                                <h5>✅ Gmail Connected</h5>
-                                <p><strong>Email:</strong> ${data.email}</p>
-                                <p><strong>Total Messages:</strong> ${data.total_messages || 'Unknown'}</p>
-                                <p><strong>Status:</strong> ${data.status}</p>
-                            </div>
-                        `;
-                        document.getElementById('oauth-flow-section').style.display = 'none';
-                        scanBtn.disabled = false;
-                        scanBtn.textContent = '📊 Start Email Scan';
-                        log("✅ Gmail is connected");
-                    } else {
-                        statusDiv.innerHTML = `
-                            <div class="credentials-missing">
-                                <h5>❌ Gmail Not Connected</h5>
-                                <p><strong>Status:</strong> ${data.status}</p>
-                                <p>Click "Start Gmail OAuth" below to authenticate.</p>
-                            </div>
-                        `;
-                        document.getElementById('oauth-flow-section').style.display = 'block';
-                        scanBtn.disabled = true;
-                        scanBtn.textContent = '⚠️ Connect Gmail first';
-                        log("❌ Gmail not connected");
-                    }
-                })
-                .catch(err => {
-                    log(`❌ Failed to check Gmail status: ${err.message}`);
-                    document.getElementById('gmail-status').innerHTML = 
-                        '<div class="credentials-missing">❌ Failed to check Gmail status</div>';
-                });
-            }
-
-            function startGmailOAuth() {
-                log("🔄 Starting Gmail OAuth flow...");
-                
-                document.getElementById('start-oauth-btn').textContent = '⏳ Starting OAuth...';
-                document.getElementById('start-oauth-btn').disabled = true;
-                
-                fetch('/api/gmail/start-oauth', { method: 'POST' })
-                .then(r => r.json())
-                .then(data => {
-                    log(`📥 OAuth start response: ${JSON.stringify(data)}`);
-                    
-                    if (data.success) {
-                        document.getElementById('oauth-instructions').classList.remove('hidden');
-                        
-                        // Show instructions
-                        const instructionList = document.getElementById('instruction-list');
-                        instructionList.innerHTML = '<ol style="margin-left: 20px;">' + 
-                            data.instructions.map(inst => `<li>${inst}</li>`).join('') + 
-                            '</ol>';
-                        
-                        // Show auth URL
-                        document.getElementById('auth-url').innerHTML = 
-                            `<a href="${data.auth_url}" target="_blank" style="color: #4a90e2; text-decoration: none;">${data.auth_url}</a>`;
-                        
-                        document.getElementById('start-oauth-btn').textContent = '⏳ Waiting for authorization...';
-                        log("✅ OAuth flow started successfully");
-                    } else {
-                        alert('❌ Failed to start OAuth: ' + data.error);
-                        document.getElementById('start-oauth-btn').textContent = '🚀 Start Gmail OAuth';
-                        document.getElementById('start-oauth-btn').disabled = false;
-                        log(`❌ OAuth start failed: ${data.error}`);
-                    }
-                })
-                .catch(err => {
-                    log(`❌ OAuth start request failed: ${err.message}`);
-                    alert('OAuth request failed: ' + err.message);
-                    document.getElementById('start-oauth-btn').textContent = '🚀 Start Gmail OAuth';
-                    document.getElementById('start-oauth-btn').disabled = false;
-                });
-            }
-
-            function completeGmailOAuth() {
-                const authCode = document.getElementById('auth-code').value.trim();
-                if (!authCode) {
-                    alert('Please enter the authorization code from Google');
-                    return;
-                }
-                
-                log(`🔄 Completing OAuth with code: ${authCode.substring(0, 10)}...`);
-                
-                fetch('/api/gmail/complete-oauth', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ auth_code: authCode })
-                })
-                .then(r => r.json())
-                .then(data => {
-                    log(`📥 OAuth complete response: ${JSON.stringify(data)}`);
-                    
-                    if (data.success) {
-                        alert(`✅ Gmail authentication successful!\\nEmail: ${data.email}\\nTotal Messages: ${data.total_messages}`);
-                        document.getElementById('oauth-instructions').classList.add('hidden');
-                        document.getElementById('auth-code').value = '';
-                        checkGmailStatus();
-                        refreshLogs();
-                        log("✅ Gmail OAuth completed successfully");
-                    } else {
-                        alert('❌ OAuth completion failed: ' + data.error);
-                        log(`❌ OAuth completion failed: ${data.error}`);
-                    }
-                })
-                .catch(err => {
-                    log(`❌ OAuth completion request failed: ${err.message}`);
-                    alert('OAuth completion failed: ' + err.message);
-                });
             }
             .container { 
                 max-width: 900px; margin: 0 auto; 
@@ -456,10 +175,17 @@ def index():
                 font-size: 1em; margin: 5px;
             }
             .btn:hover { background: #357abd; }
+            .btn:disabled { background: #ccc; cursor: not-allowed; }
             .btn-success { background: #28a745; }
             .btn-success:hover { background: #218838; }
             .hidden { display: none; }
             .main-content { display: none; }
+            .debug {
+                background: #f8f9fa; border: 1px solid #dee2e6;
+                padding: 15px; border-radius: 5px; margin: 15px 0;
+                font-family: monospace; font-size: 0.9em;
+                max-height: 200px; overflow-y: auto;
+            }
             .instructions {
                 background: #f8f9fa; padding: 15px; border-radius: 5px;
                 margin: 10px 0; text-align: left; font-size: 0.9em;
@@ -471,11 +197,9 @@ def index():
                 background: #d4edda; border: 1px solid #c3e6cb;
                 color: #155724; padding: 15px; border-radius: 5px;
             }
-            .debug {
-                background: #f8f9fa; border: 1px solid #dee2e6;
-                padding: 15px; border-radius: 5px; margin: 15px 0;
-                font-family: monospace; font-size: 0.9em;
-                max-height: 200px; overflow-y: auto;
+            .credentials-missing {
+                background: #f8d7da; border: 1px solid #f5c6cb;
+                color: #721c24; padding: 15px; border-radius: 5px;
             }
         </style>
     </head>
@@ -483,13 +207,13 @@ def index():
         <div class="container">
             <div class="header">
                 <h1>🔬 VLSI Resume Scanner</h1>
-                <p>Railway Deployment with GUI OAuth</p>
+                <p>Railway Deployment - Safe Step-by-Step Setup</p>
             </div>
             
             <div class="content">
                 <div class="status">
                     <h3>✅ Railway Deployment Active!</h3>
-                    <p>Application ready with GUI-based OAuth</p>
+                    <p>Application ready - adding features step by step safely</p>
                 </div>
 
                 <div id="auth-section" class="auth-section">
@@ -505,8 +229,8 @@ def index():
                 </div>
 
                 <div id="main-content" class="main-content">
-                    <h2>🎛️ Gmail Scanner Dashboard</h2>
-                    <p>Welcome! You are successfully authenticated.</p>
+                    <h2>🎛️ Gmail Scanner Setup</h2>
+                    <p>Welcome! Let's set up Gmail access step by step.</p>
                     
                     <div class="auth-section">
                         <h4>🔑 Step 1: Configure Google OAuth Credentials</h4>
@@ -515,7 +239,7 @@ def index():
                         <div id="credentials-form" style="margin-top: 15px;">
                             <p>Enter your Google Cloud Console OAuth credentials:</p>
                             <div class="input-group">
-                                <input type="text" id="client-id" placeholder="Google Client ID (starts with numbers)" style="min-width: 400px;">
+                                <input type="text" id="client-id" placeholder="Google Client ID" style="min-width: 400px;">
                             </div>
                             <div class="input-group">
                                 <input type="password" id="client-secret" placeholder="Google Client Secret" style="min-width: 300px;">
@@ -538,31 +262,16 @@ def index():
                     </div>
 
                     <div class="auth-section">
-                        <h4>📧 Step 2: Gmail OAuth Authentication</h4>
-                        <div id="gmail-status">Loading Gmail status...</div>
-                        
-                        <div id="oauth-flow-section" style="margin-top: 15px;">
-                            <button onclick="startGmailOAuth()" class="btn btn-success" id="start-oauth-btn" disabled>🚀 Start Gmail OAuth</button>
-                            
-                            <div id="oauth-instructions" class="hidden" style="margin-top: 15px;">
-                                <div class="instructions">
-                                    <h6>📋 OAuth Authorization Steps:</h6>
-                                    <div id="instruction-list"></div>
-                                    <p><strong>Authorization URL:</strong></p>
-                                    <div id="auth-url" style="background: #f5f5f5; padding: 10px; border-radius: 5px; word-break: break-all; margin: 10px 0; font-size: 0.9em; max-height: 100px; overflow-y: auto;"></div>
-                                    <div class="input-group">
-                                        <input type="text" id="auth-code" placeholder="Paste authorization code here" style="min-width: 300px; font-family: monospace;">
-                                        <button onclick="completeGmailOAuth()" class="btn">✅ Complete OAuth</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <h4>📧 Step 2: Test OAuth Setup</h4>
+                        <p>Once credentials are configured, test the OAuth setup before proceeding.</p>
+                        <button onclick="testOAuthSetup()" class="btn" disabled id="test-oauth-btn">🧪 Test OAuth Setup</button>
+                        <div id="oauth-test-results" style="margin-top: 10px;"></div>
                     </div>
 
                     <div class="auth-section">
-                        <h4>📊 Step 3: Email Scanning</h4>
-                        <p>Complete Gmail authentication above to enable email scanning features.</p>
-                        <button class="btn" disabled id="scan-btn">📊 Start Email Scan</button>
+                        <h4>📊 Step 3: Gmail Authentication</h4>
+                        <p>After testing OAuth setup, Gmail authentication will be available here.</p>
+                        <button class="btn" disabled>🚀 Gmail OAuth (Coming Next)</button>
                     </div>
                     
                     <div class="auth-section">
@@ -624,7 +333,6 @@ def index():
                         refreshInfo();
                         refreshLogs();
                         checkCredentialsStatus();
-                        checkGmailStatus();
                     } else {
                         log(`❌ Authentication failed: ${data.message}`);
                         alert('Authentication failed: ' + data.message);
@@ -637,42 +345,6 @@ def index():
                 });
             }
 
-            function refreshInfo() {
-                log("🔄 Refreshing system info...");
-                
-                fetch('/api/system-info')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('system-info').innerHTML = `
-                        <p><strong>Port:</strong> ${data.port}</p>
-                        <p><strong>Environment:</strong> ${data.environment}</p>
-                        <p><strong>Google APIs:</strong> ${data.google_apis_available ? '✅' : '❌'}</p>
-                        <p><strong>OAuth Credentials:</strong> ${data.oauth_credentials_configured ? '✅' : '❌'}</p>
-                        <p><strong>Status:</strong> ${data.deployment_status}</p>
-                    `;
-                    log("✅ System info refreshed");
-                })
-                .catch(err => {
-                    log(`❌ Failed to refresh system info: ${err.message}`);
-                });
-            }
-
-            function refreshLogs() {
-                log("🔄 Refreshing logs...");
-                
-                fetch('/api/logs')
-                .then(r => r.json())
-                .then(data => {
-                    if (data.logs && data.logs.length > 0) {
-                        document.getElementById('logs').innerHTML = data.logs.slice(-10).join('<br>');
-                    }
-                    log("✅ Logs refreshed");
-                })
-                .catch(err => {
-                    log(`❌ Failed to refresh logs: ${err.message}`);
-                });
-            }
-
             function checkCredentialsStatus() {
                 log("🔄 Checking credentials status...");
                 
@@ -680,9 +352,8 @@ def index():
                 .then(r => r.json())
                 .then(data => {
                     const statusDiv = document.getElementById('credentials-status');
-                    const gmailBtn = document.getElementById('gmail-setup-btn');
+                    const testBtn = document.getElementById('test-oauth-btn');
                     const credentialsForm = document.getElementById('credentials-form');
-                    const startOAuthBtn = document.getElementById('start-oauth-btn');
                     
                     if (data.configured) {
                         statusDiv.innerHTML = `
@@ -692,10 +363,8 @@ def index():
                                 <p><strong>Client Secret:</strong> ${data.has_secret ? '✅ Set' : '❌ Missing'}</p>
                             </div>
                         `;
-                        gmailBtn.disabled = false;
-                        gmailBtn.textContent = '🚀 Ready for Gmail OAuth';
-                        startOAuthBtn.disabled = false;
-                        startOAuthBtn.textContent = '🚀 Start Gmail OAuth';
+                        testBtn.disabled = false;
+                        testBtn.textContent = '🧪 Test OAuth Setup';
                         credentialsForm.style.display = 'none';
                         log("✅ Credentials are configured");
                     } else {
@@ -705,18 +374,14 @@ def index():
                                 <p>Please enter your Google Cloud Console credentials below.</p>
                             </div>
                         `;
-                        gmailBtn.disabled = true;
-                        gmailBtn.textContent = '⚠️ Configure credentials first';
-                        startOAuthBtn.disabled = true;
-                        startOAuthBtn.textContent = '⚠️ Configure credentials first';
+                        testBtn.disabled = true;
+                        testBtn.textContent = '⚠️ Configure credentials first';
                         credentialsForm.style.display = 'block';
                         log("❌ Credentials not configured");
                     }
                 })
                 .catch(err => {
                     log(`❌ Failed to check credentials: ${err.message}`);
-                    document.getElementById('credentials-status').innerHTML = 
-                        '<div class="credentials-missing">❌ Failed to check credentials status</div>';
                 });
             }
 
@@ -794,6 +459,90 @@ def index():
                     alert('Failed to clear credentials: ' + err.message);
                 });
             }
+
+            function testOAuthSetup() {
+                log("🔄 Testing OAuth setup...");
+                
+                document.getElementById('test-oauth-btn').disabled = true;
+                document.getElementById('test-oauth-btn').textContent = '⏳ Testing...';
+                
+                fetch('/api/gmail/test-oauth', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    const resultsDiv = document.getElementById('oauth-test-results');
+                    
+                    if (data.success) {
+                        resultsDiv.innerHTML = `
+                            <div class="credentials-configured">
+                                <h6>✅ OAuth Setup Test Successful</h6>
+                                <p>${data.message}</p>
+                            </div>
+                        `;
+                        log("✅ OAuth test successful");
+                    } else {
+                        resultsDiv.innerHTML = `
+                            <div class="credentials-missing">
+                                <h6>❌ OAuth Setup Test Failed</h6>
+                                <p>${data.error}</p>
+                            </div>
+                        `;
+                        log(`❌ OAuth test failed: ${data.error}`);
+                    }
+                    
+                    document.getElementById('test-oauth-btn').disabled = false;
+                    document.getElementById('test-oauth-btn').textContent = '🧪 Test OAuth Setup';
+                    refreshLogs();
+                })
+                .catch(err => {
+                    log(`❌ OAuth test request failed: ${err.message}`);
+                    document.getElementById('oauth-test-results').innerHTML = `
+                        <div class="credentials-missing">
+                            <h6>❌ Test Request Failed</h6>
+                            <p>${err.message}</p>
+                        </div>
+                    `;
+                    document.getElementById('test-oauth-btn').disabled = false;
+                    document.getElementById('test-oauth-btn').textContent = '🧪 Test OAuth Setup';
+                });
+            }
+
+            function refreshInfo() {
+                log("🔄 Refreshing system info...");
+                
+                fetch('/api/system-info')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('system-info').innerHTML = `
+                        <p><strong>Port:</strong> ${data.port}</p>
+                        <p><strong>Environment:</strong> ${data.environment}</p>
+                        <p><strong>Google APIs:</strong> ${data.google_apis_available ? '✅' : '❌'}</p>
+                        <p><strong>OAuth Credentials:</strong> ${data.oauth_credentials_configured ? '✅' : '❌'}</p>
+                        <p><strong>Status:</strong> ${data.deployment_status}</p>
+                    `;
+                    log("✅ System info refreshed");
+                })
+                .catch(err => {
+                    log(`❌ Failed to refresh system info: ${err.message}`);
+                });
+            }
+
+            function refreshLogs() {
+                log("🔄 Refreshing logs...");
+                
+                fetch('/api/logs')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.logs && data.logs.length > 0) {
+                        document.getElementById('logs').innerHTML = data.logs.slice(-10).join('<br>');
+                    }
+                    log("✅ Logs refreshed");
+                })
+                .catch(err => {
+                    log(`❌ Failed to refresh logs: ${err.message}`);
+                });
+            }
+
+            // Handle Enter key
             document.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter' && document.getElementById('auth-section').style.display !== 'none') {
                     login();
@@ -804,7 +553,7 @@ def index():
             document.addEventListener('DOMContentLoaded', function() {
                 log("🚀 Page loaded successfully");
                 log("🔧 Admin password: admin123");
-                log("📋 Ready for OAuth credential setup");
+                log("📋 Safe step-by-step setup ready");
             });
         </script>
     </body>
@@ -873,47 +622,6 @@ def api_gmail_credentials_status():
         scanner.add_log(f"Credentials status check failed: {e}", "ERROR")
         return jsonify({'configured': False, 'error': str(e)})
 
-@app.route('/api/gmail/start-oauth', methods=['POST'])
-def api_gmail_start_oauth():
-    """Start Gmail OAuth flow"""
-    try:
-        if not session.get('admin_authenticated'):
-            return jsonify({'error': 'Authentication required'}), 401
-        
-        result = scanner.start_oauth_flow()
-        return jsonify(result)
-    except Exception as e:
-        scanner.add_log(f"Gmail OAuth start failed: {e}", "ERROR")
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/gmail/complete-oauth', methods=['POST'])
-def api_gmail_complete_oauth():
-    """Complete Gmail OAuth flow"""
-    try:
-        if not session.get('admin_authenticated'):
-            return jsonify({'error': 'Authentication required'}), 401
-        
-        data = request.get_json()
-        auth_code = data.get('auth_code', '')
-        result = scanner.complete_oauth_flow(auth_code)
-        return jsonify(result)
-    except Exception as e:
-        scanner.add_log(f"Gmail OAuth completion failed: {e}", "ERROR")
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/gmail/status')
-def api_gmail_status():
-    """Get Gmail connection status"""
-    try:
-        if not session.get('admin_authenticated'):
-            return jsonify({'error': 'Authentication required'}), 401
-        
-        status = scanner.get_gmail_status()
-        return jsonify(status)
-    except Exception as e:
-        scanner.add_log(f"Gmail status check failed: {e}", "ERROR")
-        return jsonify({'connected': False, 'status': f'Error: {str(e)}'})
-
 @app.route('/api/gmail/clear-credentials', methods=['POST'])
 def api_gmail_clear_credentials():
     """Clear stored OAuth credentials"""
@@ -926,6 +634,21 @@ def api_gmail_clear_credentials():
     except Exception as e:
         scanner.add_log(f"Clear credentials failed: {e}", "ERROR")
         return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/gmail/test-oauth', methods=['POST'])
+def api_gmail_test_oauth():
+    """Test OAuth setup without complex operations"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        result = scanner.test_oauth_setup()
+        return jsonify(result)
+    except Exception as e:
+        scanner.add_log(f"OAuth test failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/system-info')
 def api_system_info():
     """System information"""
     try:
@@ -938,7 +661,7 @@ def api_system_info():
             'admin_authenticated': True,
             'google_apis_available': GOOGLE_APIS_AVAILABLE,
             'oauth_credentials_configured': scanner.get_credentials_status()['configured'],
-            'deployment_status': 'Active with GUI OAuth',
+            'deployment_status': 'Active - Safe Step-by-Step',
             'timestamp': datetime.now().isoformat()
         })
     except Exception as e:
@@ -970,7 +693,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'message': 'VLSI Resume Scanner is running',
+        'message': 'VLSI Resume Scanner - Safe Step-by-Step',
         'gmail_apis': GOOGLE_APIS_AVAILABLE
     })
 
@@ -988,12 +711,12 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
     
-    print(f"🚀 Starting VLSI Resume Scanner on Railway")
+    print(f"🚀 Starting VLSI Resume Scanner - Safe Version")
     print(f"📊 Port: {port}")
     print(f"🔑 Admin password: '{ADMIN_PASSWORD}'")
     print(f"📧 Google APIs Available: {GOOGLE_APIS_AVAILABLE}")
     
-    scanner.add_log("Application starting up")
+    scanner.add_log("Application starting up - safe step-by-step mode")
     
     app.run(
         debug=debug_mode, 

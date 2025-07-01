@@ -1096,63 +1096,201 @@ class VLSIResumeScanner:
             return False
 
     def scan_gmail_for_resumes(self, max_emails=100, full_scan=False):
-        """Scan Gmail for resumes and categorize them in Google Drive"""
+        """Scan Gmail for resumes and categorize them in Google Drive - RAILWAY OPTIMIZED"""
         try:
             if not self.gmail_service:
                 return {'success': False, 'error': 'Gmail service not authenticated'}
             
-            # FOR TESTING: Limit max_emails to reasonable number
-            if max_emails > 500:
-                max_emails = 500  # Safety limit for testing
-                self.add_log(f"⚠️ Limited scan to {max_emails} emails for safety", 'warning')
+            # RAILWAY FIX: Even smaller batches for testing to prevent timeouts
+            if max_emails > 50:
+                max_emails = 50  # VERY conservative for Railway
+                self.add_log(f"⚠️ Limited scan to {max_emails} emails for Railway stability", 'warning')
             
             scan_type = "FULL" if full_scan else "INCREMENTAL"
-            self.add_log(f"📧 Starting {scan_type} Gmail scan (LIMITED to {max_emails} emails for testing)", 'info')
+            self.add_log(f"📧 Starting {scan_type} Gmail scan (RAILWAY-OPTIMIZED: {max_emails} emails)", 'info')
             
-            # Search queries for different types of resumes
+            # RAILWAY FIX: Simplified queries to reduce processing time
             resume_queries = [
-                'subject:(resume OR CV OR "curriculum vitae")',
-                'has:attachment filename:(pdf OR doc OR docx)',
-                'subject:(application OR applying OR "job application")',
-                '"attached resume" OR "my resume" OR "my CV"',
-                'subject:(vlsi OR verilog OR vhdl OR asic OR fpga OR semiconductor)',
-                'body:(vlsi OR semiconductor OR "chip design" OR "digital design")'
+                'subject:(resume OR CV)',
+                'has:attachment filename:pdf',
+                '"my resume"'
             ]
             
             if not full_scan:
                 # For incremental scan, only get emails newer than last scan
                 if self.stats.get('last_scan_time'):
-                    last_scan = datetime.fromisoformat(self.stats['last_scan_time'].replace('Z', '+00:00'))
-                    cutoff_date = last_scan.strftime('%Y/%m/%d')
-                    resume_queries = [f"({query}) after:{cutoff_date}" for query in resume_queries]
+                    try:
+                        last_scan = datetime.fromisoformat(self.stats['last_scan_time'].replace('Z', '+00:00'))
+                        cutoff_date = last_scan.strftime('%Y/%m/%d')
+                        resume_queries = [f"({query}) after:{cutoff_date}" for query in resume_queries]
+                    except Exception as date_error:
+                        self.add_log(f"❌ Date parsing error: {date_error}", 'warning')
             
             all_emails = []
             processed_resumes = []
             
-            # Calculate emails per query to stay within limit
+            # RAILWAY FIX: Process even smaller batches
             emails_per_query = max(1, max_emails // len(resume_queries))
+            emails_per_query = min(emails_per_query, 20)  # Max 20 per query for Railway
             
-            for query in resume_queries:
+            for query_index, query in enumerate(resume_queries):
                 try:
-                    # Search Gmail with the query - LIMITED for testing
+                    self.add_log(f"🔍 Processing query {query_index + 1}/{len(resume_queries)}: {query[:30]}...", 'info')
+                    
+                    # Search Gmail with very limited results
                     results = self.gmail_service.users().messages().list(
                         userId='me',
                         q=query,
-                        maxResults=emails_per_query  # Limited per query
+                        maxResults=emails_per_query
                     ).execute()
                     
                     messages = results.get('messages', [])
-                    self.add_log(f"🔍 Found {len(messages)} emails for query: {query[:40]}... (limited to {emails_per_query})", 'info')
+                    self.add_log(f"📧 Found {len(messages)} emails for this query", 'info')
                     
-                    for message in messages:
-                        # TESTING LIMIT: Stop if we've processed enough
+                    for msg_index, message in enumerate(messages):
+                        # RAILWAY FIX: Stop if we've processed enough
                         if len(all_emails) >= max_emails:
-                            self.add_log(f"📊 Reached testing limit of {max_emails} emails", 'info')
+                            self.add_log(f"📊 Reached Railway limit of {max_emails} emails", 'info')
                             break
                         
                         # Skip if already processed
                         if message['id'] in self.stats['processed_email_ids']:
                             continue
+                        
+                        try:
+                            self.add_log(f"📤 Processing email {msg_index + 1}/{len(messages)} in query {query_index + 1}", 'info')
+                            
+                            # RAILWAY FIX: Get minimal email data first
+                            email_data = self.gmail_service.users().messages().get(
+                                userId='me',
+                                id=message['id'],
+                                format='metadata',  # Faster than 'full'
+                                metadataHeaders=['From', 'Subject', 'Date']
+                            ).execute()
+                            
+                            # Extract basic info quickly
+                            headers = email_data['payload'].get('headers', [])
+                            email_info = {
+                                'id': message['id'],
+                                'from': next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown'),
+                                'subject': next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject'),
+                                'date': next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown'),
+                                'attachments': [],
+                                'body_preview': ''
+                            }
+                            
+                            # RAILWAY FIX: Skip heavy processing for now, just do basic categorization
+                            simple_analysis = self.simple_resume_analysis(email_info['subject'], email_info['from'])
+                            email_info.update(simple_analysis)
+                            
+                            all_emails.append(email_info)
+                            
+                            # RAILWAY FIX: Only process high-scoring emails to save time
+                            if simple_analysis.get('score', 0) > 5:
+                                processed_resumes.append(email_info)
+                                self.stats['processed_email_ids'].add(message['id'])
+                                self.add_log(f"✅ Quick-processed: {email_info['subject'][:30]}... (Score: {simple_analysis.get('score', 0)})", 'info')
+                            
+                        except Exception as email_error:
+                            self.add_log(f"❌ Error processing email {message.get('id', 'unknown')}: {email_error}", 'warning')
+                            continue
+                    
+                    # RAILWAY FIX: Break if we have enough emails
+                    if len(all_emails) >= max_emails:
+                        break
+                        
+                except Exception as query_error:
+                    self.add_log(f"❌ Error with query '{query}': {query_error}", 'warning')
+                    continue
+            
+            # Update stats
+            self.stats['total_emails'] = len(all_emails)
+            self.stats['resumes_found'] = len(processed_resumes)
+            self.stats['last_scan_time'] = datetime.now().isoformat()
+            
+            if full_scan:
+                self.stats['last_full_scan'] = datetime.now().isoformat()
+            
+            self.add_log(f"✅ RAILWAY-OPTIMIZED {scan_type} scan completed: {len(all_emails)} emails, {len(processed_resumes)} resumes processed", 'info')
+            
+            return {
+                'success': True,
+                'emails_scanned': len(all_emails),
+                'resumes_found': len(processed_resumes),
+                'resume_details': processed_resumes[:5],  # Return only top 5 for Railway
+                'scan_method': 'railway_optimized_gmail_scan',
+                'scan_type': scan_type,
+                'categories': self.get_simple_category_counts(processed_resumes)
+            }
+            
+        except Exception as e:
+            self.add_log(f"❌ Railway-optimized Gmail scan failed: {e}", 'error')
+            return {'success': False, 'error': str(e)}
+
+    def simple_resume_analysis(self, subject: str, sender: str) -> dict:
+        """Simplified analysis for Railway performance"""
+        try:
+            score = 0
+            category = 'general'
+            keywords_found = []
+            
+            # Basic text analysis
+            text = f"{subject} {sender}".lower()
+            
+            # Simple scoring
+            if any(keyword in text for keyword in ['resume', 'cv', 'curriculum']):
+                score += 10
+                keywords_found.append('Resume/CV')
+            
+            if any(keyword in text for keyword in ['vlsi', 'verilog', 'vhdl', 'asic', 'fpga']):
+                score += 15
+                category = 'vlsi'
+                keywords_found.append('VLSI')
+            
+            if any(keyword in text for keyword in ['engineer', 'designer', 'developer']):
+                score += 5
+                keywords_found.append('Engineering')
+            
+            if any(keyword in text for keyword in ['application', 'applying', 'job']):
+                score += 8
+                keywords_found.append('Job Application')
+            
+            return {
+                'score': score,
+                'category': category,
+                'keywords_found': keywords_found,
+                'vlsi_relevant': 'vlsi' in category or score >= 15
+            }
+            
+        except Exception as e:
+            self.add_log(f"❌ Simple analysis failed: {e}", 'warning')
+            return {
+                'score': 0,
+                'category': 'general',
+                'keywords_found': [],
+                'vlsi_relevant': False
+            }
+
+    def get_simple_category_counts(self, resumes: list) -> dict:
+        """Simplified category counts for Railway"""
+        try:
+            counts = {
+                'vlsi_relevant': 0,
+                'general': 0,
+                'total': len(resumes)
+            }
+            
+            for resume in resumes:
+                if resume.get('vlsi_relevant', False):
+                    counts['vlsi_relevant'] += 1
+                else:
+                    counts['general'] += 1
+            
+            return counts
+            
+        except Exception as e:
+            self.add_log(f"❌ Error calculating simple counts: {e}", 'warning')
+            return {'vlsi_relevant': 0, 'general': 0, 'total': 0}
                             
                         try:
                             # Get full email details
@@ -1745,14 +1883,14 @@ class VLSIResumeScanner:
             return {'success': False, 'error': str(e)}
 
     def _auto_sync_worker(self):
-        """Background worker for auto-sync"""
+        """Background worker for auto-sync - Railway optimized"""
         try:
-            # Perform initial full scan if never done - LIMITED for testing
+            # RAILWAY FIX: Very limited initial scan
             if not self.stats.get('last_full_scan'):
-                self.add_log("🔄 Performing initial full scan (LIMITED to 100 emails for testing)", 'info')
-                self.scan_gmail_for_resumes(max_emails=100, full_scan=True)  # Limited for testing
+                self.add_log("🔄 Performing Railway-optimized initial scan (20 emails max)", 'info')
+                self.scan_gmail_for_resumes(max_emails=20, full_scan=True)
             
-            # Then run incremental scans every 2 hours
+            # Then run very conservative incremental scans every 2 hours
             while not self.stop_auto_sync:
                 try:
                     # Wait for 2 hours (7200 seconds)
@@ -1762,8 +1900,8 @@ class VLSIResumeScanner:
                         time.sleep(10)
                     
                     if not self.stop_auto_sync:
-                        self.add_log("🔄 Running scheduled incremental scan (LIMITED to 50 emails for testing)", 'info')
-                        self.scan_gmail_for_resumes(max_emails=50, full_scan=False)  # Limited for testing
+                        self.add_log("🔄 Running Railway-optimized incremental scan (10 emails max)", 'info')
+                        self.scan_gmail_for_resumes(max_emails=10, full_scan=False)
                     
                 except Exception as scan_error:
                     self.add_log(f"❌ Auto-sync scan error: {scan_error}", 'error')
@@ -2235,8 +2373,8 @@ def index():
                         fullScanBtn.disabled = false;
                         incrementalScanBtn.disabled = false;
                         startAutoSyncBtn.disabled = false;
-                        fullScanBtn.textContent = '📊 Test Scan (100 emails)';
-                        incrementalScanBtn.textContent = '🔄 Quick Test (50 emails)';
+                        fullScanBtn.textContent = '📊 Quick Test (20 emails)';
+                        incrementalScanBtn.textContent = '🔄 Mini Test (10 emails)';
                     } else {
                         fullScanBtn.disabled = true;
                         incrementalScanBtn.disabled = true;

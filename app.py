@@ -74,7 +74,7 @@ class BasicGmailScanner:
         """Start Gmail OAuth flow using stored credentials"""
         try:
             if not GOOGLE_APIS_AVAILABLE:
-                return {'success': False, 'error': 'Google APIs not installed. Install: pip install google-auth google-auth-oauthlib google-api-python-client'}
+                return {'success': False, 'error': 'Google APIs not installed'}
             
             if not self.client_config:
                 # Try to restore from session
@@ -85,23 +85,22 @@ class BasicGmailScanner:
             
             self.add_log("Starting Gmail OAuth flow")
             
-            # Create OAuth flow using stored credentials
-            flow = InstalledAppFlow.from_client_config(
-                self.client_config,
-                scopes=self.SCOPES
-            )
+            # Simple manual OAuth URL generation (more reliable)
+            client_id = self.client_config['installed']['client_id']
             
-            # Generate authorization URL
-            auth_url, _ = flow.authorization_url(
-                access_type='offline',
-                include_granted_scopes='true',
-                prompt='consent'  # Force consent to get refresh token
-            )
+            import urllib.parse
+            params = {
+                'client_id': client_id,
+                'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob',
+                'scope': 'https://www.googleapis.com/auth/gmail.readonly',
+                'response_type': 'code',
+                'access_type': 'offline',
+                'prompt': 'consent'
+            }
             
-            # Store flow state in session
-            session['oauth_flow_state'] = flow.state
+            auth_url = 'https://accounts.google.com/o/oauth2/auth?' + urllib.parse.urlencode(params)
             
-            self.add_log(f"OAuth URL generated: {auth_url[:50]}...")
+            self.add_log(f"OAuth URL generated successfully")
             
             return {
                 'success': True, 
@@ -134,17 +133,40 @@ class BasicGmailScanner:
             if not self.client_config:
                 return {'success': False, 'error': 'OAuth session expired. Please restart the flow.'}
             
-            # Recreate OAuth flow
-            flow = InstalledAppFlow.from_client_config(
-                self.client_config,
-                scopes=self.SCOPES
+            # Manual token exchange (more reliable than InstalledAppFlow)
+            import urllib.parse, urllib.request, json
+            
+            client_id = self.client_config['installed']['client_id']
+            client_secret = self.client_config['installed']['client_secret']
+            
+            token_data = {
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'code': auth_code,
+                'grant_type': 'authorization_code',
+                'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob'
+            }
+            
+            req = urllib.request.Request(
+                'https://oauth2.googleapis.com/token',
+                data=urllib.parse.urlencode(token_data).encode(),
+                headers={'Content-Type': 'application/x-www-form-urlencoded'}
             )
             
-            # Exchange authorization code for credentials
-            flow.fetch_token(code=auth_code)
+            with urllib.request.urlopen(req) as response:
+                token_response = json.loads(response.read().decode())
             
-            # Store credentials
-            self.credentials = flow.credentials
+            if 'error' in token_response:
+                return {'success': False, 'error': f"Token exchange failed: {token_response.get('error_description', 'Unknown error')}"}
+            
+            # Create credentials manually
+            self.credentials = Credentials(
+                token=token_response.get('access_token'),
+                refresh_token=token_response.get('refresh_token'),
+                token_uri='https://oauth2.googleapis.com/token',
+                client_id=client_id,
+                client_secret=client_secret
+            )
             
             # Create Gmail service
             self.gmail_service = build('gmail', 'v1', credentials=self.credentials)
@@ -160,18 +182,15 @@ class BasicGmailScanner:
                 'refresh_token': self.credentials.refresh_token,
                 'token_uri': self.credentials.token_uri,
                 'client_id': self.credentials.client_id,
-                'client_secret': self.credentials.client_secret,
-                'scopes': self.credentials.scopes
+                'client_secret': self.credentials.client_secret
             }
             
             self.add_log(f"Gmail authentication successful for: {email_address}")
-            self.add_log(f"Total messages in mailbox: {total_messages}")
             
             return {
                 'success': True,
                 'email': email_address,
-                'total_messages': total_messages,
-                'scopes_granted': self.credentials.scopes
+                'total_messages': total_messages
             }
             
         except Exception as e:
@@ -185,15 +204,22 @@ class BasicGmailScanner:
                 # Try to restore from session
                 creds_data = session.get('gmail_credentials')
                 if creds_data:
-                    self.credentials = Credentials(
-                        token=creds_data['token'],
-                        refresh_token=creds_data.get('refresh_token'),
-                        token_uri=creds_data['token_uri'],
-                        client_id=creds_data['client_id'],
-                        client_secret=creds_data['client_secret'],
-                        scopes=creds_data['scopes']
-                    )
-                    self.gmail_service = build('gmail', 'v1', credentials=self.credentials)
+                    try:
+                        self.credentials = Credentials(
+                            token=creds_data['token'],
+                            refresh_token=creds_data.get('refresh_token'),
+                            token_uri=creds_data['token_uri'],
+                            client_id=creds_data['client_id'],
+                            client_secret=creds_data['client_secret']
+                        )
+                        self.gmail_service = build('gmail', 'v1', credentials=self.credentials)
+                    except Exception as e:
+                        self.add_log(f"Failed to restore Gmail credentials: {e}", "ERROR")
+                        return {
+                            'connected': False,
+                            'email': None,
+                            'status': 'Credentials restoration failed'
+                        }
             
             if not self.gmail_service:
                 return {
@@ -215,6 +241,9 @@ class BasicGmailScanner:
             
         except Exception as e:
             self.add_log(f"Gmail status check failed: {e}", "ERROR")
+            # Clear invalid credentials
+            self.gmail_service = None
+            self.credentials = None
             return {
                 'connected': False,
                 'email': None,

@@ -32,16 +32,8 @@ class EnhancedGmailScanner:
             'https://www.googleapis.com/auth/gmail.metadata'
         ]
         
-        # Railway-compatible OAuth settings
-        self.client_config = {
-            "installed": {
-                "client_id": os.environ.get('GOOGLE_CLIENT_ID', ''),
-                "client_secret": os.environ.get('GOOGLE_CLIENT_SECRET', ''),
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]
-            }
-        }
+        # GUI-based OAuth settings (no environment variables needed)
+        self.client_config = None  # Will be set via GUI
         
     def add_log(self, message, level="INFO"):
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -49,25 +41,59 @@ class EnhancedGmailScanner:
         self.logs.append(log_entry)
         print(log_entry)  # Railway logs
         
+    def setup_oauth_credentials(self, client_id, client_secret):
+        """Setup OAuth credentials from GUI input"""
+        try:
+            if not client_id or not client_secret:
+                return {'success': False, 'error': 'Both Client ID and Client Secret are required'}
+            
+            if len(client_id.strip()) < 50:
+                return {'success': False, 'error': 'Client ID appears invalid (too short)'}
+            
+            if len(client_secret.strip()) < 20:
+                return {'success': False, 'error': 'Client Secret appears invalid (too short)'}
+            
+            # Create client configuration
+            self.client_config = {
+                "installed": {
+                    "client_id": client_id.strip(),
+                    "client_secret": client_secret.strip(),
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]
+                }
+            }
+            
+            # Store in session for persistence
+            session['oauth_client_config'] = self.client_config
+            
+            self.add_log("OAuth credentials configured successfully via GUI")
+            return {'success': True, 'message': 'OAuth credentials configured successfully'}
+            
+        except Exception as e:
+            self.add_log(f"OAuth credential setup failed: {e}", "ERROR")
+            return {'success': False, 'error': str(e)}
+    
     def validate_environment(self):
-        """Validate Google OAuth environment setup"""
+        """Validate OAuth setup - now checks GUI credentials"""
         try:
             if not GOOGLE_APIS_AVAILABLE:
                 return {'success': False, 'error': 'Google APIs not installed. Run: pip install google-auth google-auth-oauthlib google-api-python-client'}
-                
-            client_id = os.environ.get('GOOGLE_CLIENT_ID')
-            client_secret = os.environ.get('GOOGLE_CLIENT_SECRET')
             
-            if not client_id:
-                return {'success': False, 'error': 'GOOGLE_CLIENT_ID environment variable not set in Railway'}
+            if not self.client_config:
+                # Try to restore from session
+                self.client_config = session.get('oauth_client_config')
+                
+            if not self.client_config:
+                return {'success': False, 'error': 'OAuth credentials not configured. Please enter your Google Client ID and Secret.'}
             
-            if not client_secret:
-                return {'success': False, 'error': 'GOOGLE_CLIENT_SECRET environment variable not set in Railway'}
+            client_id = self.client_config.get('installed', {}).get('client_id', '')
+            client_secret = self.client_config.get('installed', {}).get('client_secret', '')
+            
+            if not client_id or not client_secret:
+                return {'success': False, 'error': 'Invalid OAuth configuration. Please re-enter credentials.'}
                 
-            if len(client_id) < 50:  # Basic validation
-                return {'success': False, 'error': 'GOOGLE_CLIENT_ID appears invalid (too short)'}
-                
-            self.add_log("Environment validation successful")
+            self.add_log("OAuth environment validation successful")
             return {'success': True}
             
         except Exception as e:
@@ -268,7 +294,26 @@ class EnhancedGmailScanner:
             self.add_log(f"Disconnect failed: {e}", "ERROR")
             return {'success': False, 'error': str(e)}
     
-    def basic_gmail_scan(self, max_emails=100):
+    def get_credentials_status(self):
+        """Check if OAuth credentials are configured"""
+        if self.client_config:
+            return {
+                'configured': True,
+                'client_id_preview': self.client_config['installed']['client_id'][:20] + '...',
+                'has_secret': bool(self.client_config['installed']['client_secret'])
+            }
+        
+        # Try session
+        session_config = session.get('oauth_client_config')
+        if session_config:
+            self.client_config = session_config
+            return {
+                'configured': True,
+                'client_id_preview': session_config['installed']['client_id'][:20] + '...',
+                'has_secret': bool(session_config['installed']['client_secret'])
+            }
+        
+        return {'configured': False}
         """BASIC Gmail scan - enhanced with better error handling"""
         try:
             if not self.gmail_service:
@@ -421,8 +466,7 @@ def index():
                     <h4>🔧 Environment Configuration</h4>
                     <p><strong>Port:</strong> ''' + str(os.environ.get('PORT', 'Not Set')) + '''</p>
                     <p><strong>Google APIs:</strong> ''' + ('✅ Available' if GOOGLE_APIS_AVAILABLE else '❌ Not Installed') + '''</p>
-                    <p><strong>Google Client ID:</strong> ''' + ('✅ Configured' if os.environ.get('GOOGLE_CLIENT_ID') else '❌ Not Set') + '''</p>
-                    <p><strong>Google Client Secret:</strong> ''' + ('✅ Configured' if os.environ.get('GOOGLE_CLIENT_SECRET') else '❌ Not Set') + '''</p>
+                    <p><strong>OAuth Credentials:</strong> Configured via GUI</p>
                     <p><strong>Admin Password:</strong> ''' + ('✅ Custom' if os.environ.get('ADMIN_PASSWORD') else '⚠️ Default (admin123)') + '''</p>
                 </div>
 
@@ -441,10 +485,44 @@ def index():
                     
                     <div class="gmail-section">
                         <h4>📧 Gmail OAuth Authentication</h4>
+                        
+                        <!-- OAuth Credentials Setup -->
+                        <div id="credentials-setup" class="oauth-section">
+                            <h5>🔑 Step 1: Configure OAuth Credentials</h5>
+                            <p>Enter your Google Cloud Console OAuth credentials:</p>
+                            <div id="credentials-status">Loading credentials status...</div>
+                            
+                            <div id="credentials-form">
+                                <div class="input-group">
+                                    <input type="text" id="client-id" placeholder="Google Client ID" style="min-width: 400px;">
+                                </div>
+                                <div class="input-group">
+                                    <input type="password" id="client-secret" placeholder="Google Client Secret" style="min-width: 400px;">
+                                </div>
+                                <button class="btn btn-success" onclick="setupCredentials()">💾 Save Credentials</button>
+                                <button class="btn" onclick="clearCredentials()">🗑️ Clear</button>
+                            </div>
+                            
+                            <div class="instructions">
+                                <h6>📋 How to get Google OAuth credentials:</h6>
+                                <ol>
+                                    <li>Go to <a href="https://console.cloud.google.com" target="_blank">Google Cloud Console</a></li>
+                                    <li>Create a new project or select existing one</li>
+                                    <li>Enable Gmail API in "APIs & Services"</li>
+                                    <li>Go to "Credentials" → "Create Credentials" → "OAuth 2.0 Client IDs"</li>
+                                    <li>Choose "Desktop Application" as application type</li>
+                                    <li>Copy the Client ID and Client Secret here</li>
+                                </ol>
+                            </div>
+                        </div>
+                        
+                        <!-- OAuth Status -->
                         <div id="oauth-status">Loading OAuth status...</div>
                         
+                        <!-- OAuth Flow -->
                         <div id="oauth-flow" class="oauth-section">
-                            <button class="btn btn-success" onclick="startEnhancedOAuth()" id="oauth-btn">🚀 Start Enhanced OAuth</button>
+                            <h5>🚀 Step 2: Authenticate with Gmail</h5>
+                            <button class="btn btn-success" onclick="startEnhancedOAuth()" id="oauth-btn" disabled>🚀 Start Gmail OAuth</button>
                             
                             <div id="oauth-instructions" class="instructions hidden">
                                 <h5>📋 OAuth Setup Instructions</h5>
@@ -503,6 +581,7 @@ def index():
                     document.getElementById('main-content').style.display = 'block';
                     refreshSystemInfo();
                     refreshLogs();
+                    checkCredentialsStatus();
                     checkOAuthStatus();
                 } else {
                     alert('Invalid password. Please try again.');
@@ -515,7 +594,99 @@ def index():
             });
         }
 
-        function checkOAuthStatus() {
+        function checkCredentialsStatus() {
+            fetch('/api/gmail/credentials-status')
+            .then(r => r.json())
+            .then(data => {
+                const statusDiv = document.getElementById('credentials-status');
+                const oauthBtn = document.getElementById('oauth-btn');
+                
+                if (data.configured) {
+                    statusDiv.innerHTML = `
+                        <div class="oauth-connected">
+                            <p>✅ <strong>Credentials Configured</strong></p>
+                            <p><strong>Client ID:</strong> ${data.client_id_preview}</p>
+                            <p><strong>Client Secret:</strong> ${data.has_secret ? '✅ Set' : '❌ Missing'}</p>
+                        </div>
+                    `;
+                    oauthBtn.disabled = false;
+                    document.getElementById('credentials-form').style.display = 'none';
+                } else {
+                    statusDiv.innerHTML = `
+                        <div class="oauth-section">
+                            <p>❌ <strong>OAuth credentials not configured</strong></p>
+                            <p>Please enter your Google Cloud Console credentials below.</p>
+                        </div>
+                    `;
+                    oauthBtn.disabled = true;
+                    document.getElementById('credentials-form').style.display = 'block';
+                }
+            })
+            .catch(err => {
+                console.error('Credentials status error:', err);
+                document.getElementById('credentials-status').innerHTML = '<p style="color: red;">Failed to check credentials status</p>';
+            });
+        }
+
+        function setupCredentials() {
+            const clientId = document.getElementById('client-id').value.trim();
+            const clientSecret = document.getElementById('client-secret').value.trim();
+            
+            if (!clientId || !clientSecret) {
+                alert('Please enter both Client ID and Client Secret');
+                return;
+            }
+            
+            fetch('/api/gmail/setup-credentials', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    client_id: clientId,
+                    client_secret: clientSecret 
+                })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('OAuth credentials configured successfully!');
+                    document.getElementById('client-id').value = '';
+                    document.getElementById('client-secret').value = '';
+                    checkCredentialsStatus();
+                    refreshLogs();
+                } else {
+                    alert('Failed to configure credentials: ' + data.error);
+                }
+            })
+            .catch(err => {
+                alert('Failed to save credentials');
+                console.error('Credentials setup error:', err);
+            });
+        }
+
+        function clearCredentials() {
+            if (!confirm('Are you sure you want to clear the stored OAuth credentials?')) {
+                return;
+            }
+            
+            fetch('/api/gmail/clear-credentials', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Credentials cleared successfully');
+                    document.getElementById('client-id').value = '';
+                    document.getElementById('client-secret').value = '';
+                    checkCredentialsStatus();
+                    checkOAuthStatus();
+                    refreshLogs();
+                } else {
+                    alert('Failed to clear credentials: ' + data.error);
+                }
+            })
+            .catch(err => {
+                alert('Failed to clear credentials');
+                console.error('Clear credentials error:', err);
+            });
+        }
             fetch('/api/gmail/oauth-status')
             .then(r => r.json())
             .then(data => {
@@ -679,7 +850,7 @@ def index():
                     <p><strong>Environment:</strong> ${data.environment}</p>
                     <p><strong>Admin Authenticated:</strong> ${data.admin_authenticated ? '✅' : '❌'}</p>
                     <p><strong>Google APIs:</strong> ${data.google_apis_available ? '✅' : '❌'}</p>
-                    <p><strong>Google Credentials:</strong> ${data.google_credentials_available ? '✅' : '❌'}</p>
+                    <p><strong>OAuth Credentials:</strong> ${data.oauth_credentials_configured ? '✅' : '❌'}</p>
                     <p><strong>Gmail Connected:</strong> ${data.gmail_authenticated ? '✅' : '❌'}</p>
                     <p><strong>OAuth Enhanced:</strong> ${data.oauth_enhanced ? '✅' : '❌'}</p>
                     <p><strong>Deployment Status:</strong> ${data.deployment_status}</p>
@@ -755,10 +926,10 @@ def api_system_info():
             'environment': 'Railway',
             'admin_authenticated': session.get('admin_authenticated', False),
             'google_apis_available': GOOGLE_APIS_AVAILABLE,
-            'google_credentials_available': bool(os.environ.get('GOOGLE_CLIENT_ID')),
+            'oauth_credentials_configured': scanner.get_credentials_status()['configured'],
             'gmail_authenticated': oauth_status['authenticated'],
             'oauth_enhanced': True,
-            'deployment_status': 'Active with Enhanced OAuth',
+            'deployment_status': 'Active with GUI OAuth',
             'timestamp': datetime.now().isoformat(),
             'railway_deployment': True,
             'gmail_email': oauth_status.get('email'),
@@ -768,7 +939,60 @@ def api_system_info():
         scanner.add_log(f"System info failed: {e}", "ERROR")
         return jsonify({'error': f'System info failed: {str(e)}'}), 500
 
-# Enhanced Gmail API endpoints
+# Enhanced Gmail API endpoints with GUI credentials
+@app.route('/api/gmail/setup-credentials', methods=['POST'])
+def api_gmail_setup_credentials():
+    """Setup OAuth credentials via GUI"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        data = request.get_json()
+        client_id = data.get('client_id', '')
+        client_secret = data.get('client_secret', '')
+        
+        result = scanner.setup_oauth_credentials(client_id, client_secret)
+        return jsonify(result)
+    except Exception as e:
+        scanner.add_log(f"Credentials setup failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/gmail/credentials-status')
+def api_gmail_credentials_status():
+    """Get OAuth credentials configuration status"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        status = scanner.get_credentials_status()
+        return jsonify(status)
+    except Exception as e:
+        scanner.add_log(f"Credentials status check failed: {e}", "ERROR")
+        return jsonify({'configured': False, 'error': str(e)})
+
+@app.route('/api/gmail/clear-credentials', methods=['POST'])
+def api_gmail_clear_credentials():
+    """Clear stored OAuth credentials"""
+    try:
+        if not session.get('admin_authenticated'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        # Clear from scanner
+        scanner.client_config = None
+        
+        # Clear from session
+        session.pop('oauth_client_config', None)
+        session.pop('gmail_credentials', None)
+        session.pop('oauth_flow_state', None)
+        
+        # Disconnect Gmail
+        scanner.disconnect_gmail()
+        
+        scanner.add_log("OAuth credentials cleared from GUI")
+        return jsonify({'success': True, 'message': 'Credentials cleared successfully'})
+    except Exception as e:
+        scanner.add_log(f"Clear credentials failed: {e}", "ERROR")
+        return jsonify({'success': False, 'error': str(e)})
 @app.route('/api/gmail/start-oauth-enhanced', methods=['POST'])
 def api_gmail_start_oauth_enhanced():
     """Start enhanced Gmail OAuth flow"""
@@ -893,6 +1117,7 @@ def not_found(error):
         'error': 'Endpoint not found', 
         'available_endpoints': [
             '/', '/health', '/api/test', '/api/auth', '/api/system-info',
+            '/api/gmail/setup-credentials', '/api/gmail/credentials-status', '/api/gmail/clear-credentials',
             '/api/gmail/start-oauth-enhanced', '/api/gmail/complete-oauth-enhanced',
             '/api/gmail/oauth-status', '/api/gmail/disconnect', '/api/gmail/basic-scan',
             '/api/logs'
@@ -916,14 +1141,14 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     debug_mode = os.environ.get('FLASK_ENV') != 'production'
     
-    print(f"🚀 Starting VLSI Resume Scanner with Enhanced OAuth on Railway")
+    print(f"🚀 Starting VLSI Resume Scanner with GUI-based OAuth on Railway")
     print(f"📊 Port: {port}")
     print(f"🔧 Debug Mode: {debug_mode}")
     print(f"📧 Google APIs Available: {GOOGLE_APIS_AVAILABLE}")
-    print(f"🔐 OAuth Enhanced: True")
+    print(f"🔐 OAuth Mode: GUI-based (no environment variables needed)")
     
     # Log startup
-    scanner.add_log("Application starting up with enhanced OAuth")
+    scanner.add_log("Application starting up with GUI-based OAuth")
     
     app.run(
         debug=debug_mode, 

@@ -1,0 +1,63 @@
+# Core Flask Framework
+Flask==2.3.3
+Werkzeug==2.3.7
+
+# Production WSGI Server (REQUIRED FOR RAILWAY)
+gunicorn==21.2.0
+
+# Google API Libraries
+google-auth==2.23.4
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+google-api-python-client==2.108.0
+googleapis-common-protos==1.61.0
+
+# PDF Processing (Multiple options for compatibility)
+PyPDF2==3.0.1
+pypdf==3.17.1
+
+# DOC/DOCX Processing
+python-docx==0.8.11
+
+# Scheduling for Auto-Scans
+schedule==1.2.0
+
+# HTTP Requests (Google Auth dependency)
+requests==2.31.0
+urllib3==2.0.7
+
+# JSON/Data Processing
+certifi==2023.7.22
+charset-normalizer==3.3.2
+idna==3.4
+
+# OAuth Flow Dependencies
+oauthlib==3.2.2
+requests-oauthlib==1.3.1
+
+# Google API Core Dependencies
+protobuf==4.25.0
+pyasn1==0.5.0
+pyasn1-modules==0.3.0
+rsa==4.9
+six==1.16.0
+cachetools==5.3.2
+
+# HTTP Library for Google APIs
+httplib2==0.22.0
+pyparsing==3.1.1
+
+# Additional Security
+cryptography==41.0.7
+
+# Python Standard Library Enhancements
+python-dateutil==2.8.2
+
+# Threading Support (built-in, but ensure compatibility)
+# No additional requirements needed for threading
+
+# Optional: Logging Enhancements
+colorlog==6.7.0
+
+# Optional: Environment Variable Management
+python-dotenv==1.0.0

@@ -35,6 +35,74 @@ class BasicGmailScanner:
         log_entry = f"[{timestamp}] [{level}] {message}"
         self.logs.append(log_entry)
         print(log_entry)
+    
+    def setup_oauth_credentials(self, client_id, client_secret):
+        """Setup OAuth credentials from GUI input"""
+        try:
+            if not client_id or not client_secret:
+                return {'success': False, 'error': 'Both Client ID and Client Secret are required'}
+            
+            client_id = client_id.strip()
+            client_secret = client_secret.strip()
+            
+            if len(client_id) < 50:
+                return {'success': False, 'error': 'Client ID appears invalid (too short - should be ~70 characters)'}
+            
+            if len(client_secret) < 20:
+                return {'success': False, 'error': 'Client Secret appears invalid (too short - should be ~24 characters)'}
+            
+            # Create client configuration
+            self.client_config = {
+                "installed": {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"]
+                }
+            }
+            
+            # Store in session for persistence
+            session['oauth_client_config'] = self.client_config
+            
+            self.add_log("OAuth credentials configured successfully via GUI")
+            return {'success': True, 'message': 'OAuth credentials configured successfully'}
+            
+        except Exception as e:
+            self.add_log(f"OAuth credential setup failed: {e}", "ERROR")
+            return {'success': False, 'error': str(e)}
+    
+    def get_credentials_status(self):
+        """Check if OAuth credentials are configured"""
+        if self.client_config:
+            return {
+                'configured': True,
+                'client_id_preview': self.client_config['installed']['client_id'][:20] + '...',
+                'has_secret': bool(self.client_config['installed']['client_secret'])
+            }
+        
+        # Try session
+        session_config = session.get('oauth_client_config')
+        if session_config:
+            self.client_config = session_config
+            return {
+                'configured': True,
+                'client_id_preview': session_config['installed']['client_id'][:20] + '...',
+                'has_secret': bool(session_config['installed']['client_secret'])
+            }
+        
+        return {'configured': False}
+    
+    def clear_credentials(self):
+        """Clear stored OAuth credentials"""
+        try:
+            self.client_config = None
+            session.pop('oauth_client_config', None)
+            self.add_log("OAuth credentials cleared from GUI")
+            return {'success': True, 'message': 'Credentials cleared successfully'}
+        except Exception as e:
+            self.add_log(f"Clear credentials failed: {e}", "ERROR")
+            return {'success': False, 'error': str(e)}
 
 # Initialize scanner
 scanner = BasicGmailScanner()
